@@ -82,6 +82,7 @@ jobs:
         if: inputs.action == 'destroy'
         run: |
           aws eks update-kubeconfig --region "$AWS_REGION" --name "$CLUSTER_NAME" || exit 0
+          kubectl -n argocd scale deploy,statefulset --all --replicas=0 || true
           kubectl delete ingress --all -A --wait=true || true
           kubectl get svc -A -o json \
             | jq -r '.items[] | select(.spec.type=="LoadBalancer") | "\(.metadata.namespace) \(.metadata.name)"' \
