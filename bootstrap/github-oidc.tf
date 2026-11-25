@@ -21,8 +21,8 @@ data "aws_iam_policy_document" "github_trust" {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
       values = [
-        "repo:NamanChaturvedii/eks-gitops-platform:ref:refs/heads/main",
-        "repo:NamanChaturvedii/eks-gitops-platform:pull_request",
+        "repo:NamanChaturvedii@128036351/eks-gitops-platform@1472288072:ref:refs/heads/main",
+        "repo:NamanChaturvedii@128036351/eks-gitops-platform@1472288072:pull_request",
       ]
     }
   }
