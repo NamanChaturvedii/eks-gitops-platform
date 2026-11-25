@@ -1,0 +1,92 @@
+name: EKS Cluster (apply / destroy)
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "apply = create/update cluster, destroy = delete cluster"
+        type: choice
+        options: [apply, destroy]
+        default: apply
+      confirm:
+        description: "Type the same action again to confirm (apply / destroy)"
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: eks-cluster        # never run two apply/destroy at once
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-south-1
+  CLUSTER_NAME: gitops-eks
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  cluster:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - name: Check confirmation
+        if: inputs.confirm != inputs.action
+        run: |
+          echo "Confirmation '${{ inputs.confirm }}' does not match action '${{ inputs.action }}'"
+          exit 1
+
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::287629436195:role/github-actions-eks-terraform
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 7200
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.17.2
+          terraform_wrapper: false
+
+      - name: Init
+        run: terraform init -input=false
+
+      - name: Plan
+        run: |
+          if [ "${{ inputs.action }}" = "destroy" ]; then
+            terraform plan -destroy -input=false -no-color -out=tfplan
+          else
+            terraform plan -input=false -no-color -out=tfplan
+          fi
+          terraform show -no-color tfplan > plan.txt
+          {
+            echo "### Terraform ${{ inputs.action }} plan"
+            echo '```'
+            grep -E '^(Plan:|No changes)' plan.txt || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Block unexpected destroys on apply
+        if: inputs.action == 'apply'
+        run: |
+          if grep -Eq 'Plan: .* [1-9][0-9]* to destroy' plan.txt; then
+            echo "::error::Apply plan wants to DESTROY resources. Review it locally first."
+            exit 1
+          fi
+
+      - name: Delete Kubernetes load balancers before destroy
+        if: inputs.action == 'destroy'
+        run: |
+          aws eks update-kubeconfig --region "$AWS_REGION" --name "$CLUSTER_NAME" || exit 0
+          kubectl delete ingress --all -A --wait=true || true
+          kubectl get svc -A -o json \
+            | jq -r '.items[] | select(.spec.type=="LoadBalancer") | "\(.metadata.namespace) \(.metadata.name)"' \
+            | while read -r ns name; do kubectl delete svc -n "$ns" "$name" --wait=true; done || true
+          sleep 60   # give AWS time to remove the ALBs/NLBs and their ENIs
+
+      - name: Apply
+        run: terraform apply -input=false tfplan
